@@ -147,6 +147,7 @@ async def _handle_transcript(
     message: UserTranscriptMessage,
 ) -> None:
     force_build = message.auto_start and _is_confirmation_turn(message.text)
+    followup_change = _is_followup_change_request(message.text)
     session.add_transcript(message.text)
     quick_info = _memory_answer_for_query(session, message.text)
     if quick_info:
@@ -202,6 +203,25 @@ async def _handle_transcript(
             ),
         )
         await _run_worker(websocket, session, message, session.current_task)
+        return
+
+    # Follow-up mode: after an app has already been built in this call flow,
+    # treat incremental change requests as immediate delegation tasks.
+    active_workspace = str(session.metadata.get("active_workspace", "")).strip()
+    if followup_change and active_workspace and not session.codex_running:
+        followup_task = _assumed_task_from_transcript(message.text)
+        session.current_task = followup_task
+        await _send(
+            websocket,
+            session,
+            event(
+                EventType.PM_TASK_READY,
+                session.session_id,
+                {"task": followup_task.model_dump()},
+                spoken="Got it. I am applying that change now.",
+            ),
+        )
+        await _run_worker(websocket, session, message, followup_task, workspace_override=active_workspace)
         return
 
     decision = decide_next_step(session.transcript_text)
@@ -266,6 +286,7 @@ async def _run_worker(
     session: SessionState,
     message: UserTranscriptMessage,
     task,
+    workspace_override: str | None = None,
 ) -> None:
     if session.codex_running:
         await _send(
@@ -285,7 +306,7 @@ async def _run_worker(
             message.worker,
             session.session_id,
             task,
-            message.workspace,
+            workspace_override or message.workspace,
             session,
         )
         async for worker_event in worker:
@@ -314,6 +335,27 @@ def _is_confirmation_turn(text: str) -> bool:
         "delegate now",
     )
     return any(phrase in normalized for phrase in confirmations)
+
+
+def _is_followup_change_request(text: str) -> bool:
+    normalized = " ".join((text or "").lower().split())
+    if not normalized:
+        return False
+    signals = (
+        "make it pretty",
+        "make the page pretty",
+        "improve ui",
+        "improve the ui",
+        "change the ui",
+        "update the ui",
+        "restyle",
+        "redesign",
+        "fix this",
+        "change this",
+        "update this",
+        "add this",
+    )
+    return any(signal in normalized for signal in signals)
 
 
 def _assumed_task_from_transcript(transcript: str) -> CodexTask:
