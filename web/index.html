@@ -50,17 +50,23 @@
         <p id="talkReadiness" class="talk-readiness" aria-live="polite">
           Press Start call. Speak when you see "Listening now".
         </p>
-        <button id="startCall" class="call-button" type="button">
-          <span class="mic-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" role="img">
-              <path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5a3.5 3.5 0 0 0 3.5 3.5Z" />
-              <path d="M5.5 10.5v.8a6.5 6.5 0 0 0 13 0v-.8" />
-              <path d="M12 17.8V21" />
-              <path d="M8.5 21h7" />
-            </svg>
-          </span>
-          <span id="callButtonLabel">Start call</span>
-        </button>
+        <div class="call-controls">
+          <button id="startCall" class="call-button" type="button">
+            <span class="mic-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5a3.5 3.5 0 0 0 3.5 3.5Z" />
+                <path d="M5.5 10.5v.8a6.5 6.5 0 0 0 13 0v-.8" />
+                <path d="M12 17.8V21" />
+                <path d="M8.5 21h7" />
+              </svg>
+            </span>
+            <span id="callButtonLabel">Start call</span>
+          </button>
+          <button id="muteMic" class="mute-button" type="button" disabled aria-pressed="false">
+            Mute mic
+          </button>
+        </div>
+        <p class="mute-hint" aria-live="polite">Shortcut: press M to mute/unmute</p>
 
         <audio id="remoteAudio" autoplay></audio>
       </section>

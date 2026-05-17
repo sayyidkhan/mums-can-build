@@ -1,5 +1,6 @@
 const startButton = document.querySelector("#startCall");
 const callButtonLabel = document.querySelector("#callButtonLabel");
+const muteButton = document.querySelector("#muteMic");
 const statusBadge = document.querySelector("#status");
 const talkReadiness = document.querySelector("#talkReadiness");
 const voiceOrb = document.querySelector("#voiceOrb");
@@ -20,6 +21,7 @@ let harnessSocket;
 let localStream;
 let sessionId;
 let callActive = false;
+let isMicMuted = false;
 const draftTranscript = new Map();
 let lastSpeechStopLogAt = 0;
 let currentStatus = "Idle";
@@ -29,8 +31,12 @@ let bridgeSpeechInFlight = false;
 let bridgeSpeechTimeout;
 let bridgeSpeechCurrentLine = "";
 let bridgeSpeechTranscriptSeen = false;
+const assistantDraftByResponseId = new Map();
+let activeAssistantResponseId = null;
 
 startButton.addEventListener("click", toggleCall);
+muteButton?.addEventListener("click", toggleMute);
+window.addEventListener("keydown", handleGlobalKeydown);
 window.addEventListener("online", checkConnectionHealth);
 window.addEventListener("offline", () => {
   setHealth("fe", "down", "Browser is offline.");
@@ -42,6 +48,7 @@ window.addEventListener("offline", () => {
 
 checkConnectionHealth();
 setInterval(checkConnectionHealth, 30000);
+refreshMuteUi();
 
 async function checkConnectionHealth() {
   setHealth("fe", navigator.onLine ? "ok" : "down", navigator.onLine ? "Browser online." : "Browser offline.");
@@ -133,6 +140,8 @@ async function startCall() {
     for (const track of localStream.getTracks()) {
       peerConnection.addTrack(track, localStream);
     }
+    isMicMuted = false;
+    refreshMuteUi();
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
@@ -216,8 +225,15 @@ function configureRealtimeSession() {
 function handleRealtimeMessage(event) {
   const payload = JSON.parse(event.data);
   const payloadType = payload.type;
+  const responseId = payload.response_id || payload.response?.id || null;
 
   if (payloadType === "response.done" || payloadType === "response.audio.done") {
+    if (responseId) {
+      clearAssistantDraftByResponseId(responseId);
+    }
+    if (activeAssistantResponseId === responseId) {
+      activeAssistantResponseId = null;
+    }
     markBridgeSpeechComplete();
     return;
   }
@@ -239,6 +255,7 @@ function handleRealtimeMessage(event) {
   }
 
   if (payloadType === "input_audio_buffer.speech_started") {
+    interruptAssistantSpeech();
     setStatus("Listening", true);
     return;
   }
@@ -254,16 +271,22 @@ function handleRealtimeMessage(event) {
   }
 
   if (payloadType === "response.audio_transcript.delta") {
-    if (payload.transcript) {
-      setDraftTranscript("assistant", payload.transcript);
+    if (payload.transcript && responseId) {
+      activeAssistantResponseId = responseId;
+      setAssistantDraftByResponseId(responseId, payload.transcript);
     }
     return;
   }
 
   if (payloadType === "response.audio_transcript.done") {
     const transcript = payload.transcript?.trim();
+    if (responseId) {
+      clearAssistantDraftByResponseId(responseId);
+      if (activeAssistantResponseId === responseId) {
+        activeAssistantResponseId = null;
+      }
+    }
     if (transcript) {
-      clearDraftTranscript("assistant");
       addAssistantTranscriptUnique(transcript);
       bridgeSpeechTranscriptSeen = true;
     }
@@ -330,6 +353,19 @@ function speakViaRealtime(text) {
   );
 }
 
+function interruptAssistantSpeech() {
+  bridgeSpeechQueue.length = 0;
+  bridgeSpeechInFlight = false;
+  bridgeSpeechCurrentLine = "";
+  bridgeSpeechTranscriptSeen = false;
+  clearTimeout(bridgeSpeechTimeout);
+  clearAllAssistantDrafts();
+  if (!dataChannel || dataChannel.readyState !== "open") {
+    return;
+  }
+  dataChannel.send(JSON.stringify({ type: "response.cancel" }));
+}
+
 function enqueueBridgeSpeech(text) {
   if (!text || !text.trim()) {
     return;
@@ -376,6 +412,8 @@ async function stopCall() {
     track.stop();
   }
   localStream = undefined;
+  isMicMuted = false;
+  refreshMuteUi();
 
   if (dataChannel && dataChannel.readyState !== "closed") {
     dataChannel.close();
@@ -397,6 +435,56 @@ async function stopCall() {
   startButton.classList.remove("ending");
   callButtonLabel.textContent = "Start call";
   setStatus("Idle", false);
+}
+
+function toggleMute() {
+  if (!callActive || !localStream) {
+    return;
+  }
+  isMicMuted = !isMicMuted;
+  applyMicMuteState();
+  refreshMuteUi();
+  addEvent("audio", isMicMuted ? "Microphone muted." : "Microphone unmuted.");
+}
+
+function handleGlobalKeydown(event) {
+  if (event.defaultPrevented || event.repeat) {
+    return;
+  }
+  if ((event.key || "").toLowerCase() !== "m") {
+    return;
+  }
+  const target = event.target;
+  const isTyping =
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT");
+  if (isTyping) {
+    return;
+  }
+  if (!callActive) {
+    return;
+  }
+  event.preventDefault();
+  toggleMute();
+}
+
+function applyMicMuteState() {
+  for (const track of localStream?.getAudioTracks() || []) {
+    track.enabled = !isMicMuted;
+  }
+}
+
+function refreshMuteUi() {
+  if (!muteButton) {
+    return;
+  }
+  muteButton.disabled = !callActive;
+  muteButton.classList.toggle("muted", isMicMuted);
+  muteButton.textContent = isMicMuted ? "Unmute mic" : "Mute mic";
+  muteButton.setAttribute("aria-pressed", isMicMuted ? "true" : "false");
 }
 
 function addTranscript(speaker, text) {
@@ -423,7 +511,7 @@ function normalizeTranscript(text) {
   return (text || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function setDraftTranscript(speaker, text) {
+function setDraftTranscript(speaker, text, displayLabel = speaker) {
   if (!text) {
     return;
   }
@@ -432,7 +520,7 @@ function setDraftTranscript(speaker, text) {
   if (existingLine) {
     const meta = existingLine.querySelector(".meta");
     if (meta) {
-      meta.textContent = `${speaker} (live)`;
+      meta.textContent = `${displayLabel} (live)`;
     }
     existingLine.childNodes[1].textContent = text;
     transcriptLog.scrollTop = transcriptLog.scrollHeight;
@@ -443,11 +531,36 @@ function setDraftTranscript(speaker, text) {
   line.className = "line draft";
   const meta = document.createElement("span");
   meta.className = "meta";
-  meta.textContent = `${speaker} (live)`;
+  meta.textContent = `${displayLabel} (live)`;
   line.append(meta, document.createTextNode(text));
   transcriptLog.append(line);
   transcriptLog.scrollTop = transcriptLog.scrollHeight;
   draftTranscript.set(speaker, line);
+}
+
+function setAssistantDraftByResponseId(responseId, text) {
+  if (!responseId || !text) {
+    return;
+  }
+  const key = `assistant:${responseId}`;
+  setDraftTranscript(key, text, "assistant");
+  assistantDraftByResponseId.set(responseId, key);
+}
+
+function clearAssistantDraftByResponseId(responseId) {
+  const key = assistantDraftByResponseId.get(responseId);
+  if (!key) {
+    return;
+  }
+  clearDraftTranscript(key);
+  assistantDraftByResponseId.delete(responseId);
+}
+
+function clearAllAssistantDrafts() {
+  for (const responseId of [...assistantDraftByResponseId.keys()]) {
+    clearAssistantDraftByResponseId(responseId);
+  }
+  activeAssistantResponseId = null;
 }
 
 function clearDraftTranscript(speaker) {
