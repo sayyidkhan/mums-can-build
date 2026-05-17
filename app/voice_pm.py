@@ -37,6 +37,10 @@ def decide_next_step(transcript: str) -> PMDecision:
             question="Should I build a new app, change an existing app, or investigate the repo?",
         )
 
+    missing = _missing_requirement_slots(cleaned)
+    if missing:
+        return PMDecision(kind="question", question=_next_clarifying_question(missing))
+
     task = CodexTask(
         title=_make_title(cleaned),
         user_goal=cleaned,
@@ -88,3 +92,92 @@ def _extract_requirements(text: str) -> list[str]:
         if len(clause.split()) >= 3:
             requirements.append(clause[0].upper() + clause[1:])
     return requirements[:6] or [text]
+
+
+def _missing_requirement_slots(text: str) -> list[str]:
+    lowered = text.lower()
+    missing: list[str] = []
+
+    if not _mentions_scope(lowered):
+        missing.append("scope")
+    if not _mentions_user(lowered):
+        missing.append("user")
+    if not _mentions_success(lowered):
+        missing.append("success")
+    if not _mentions_constraints(lowered):
+        missing.append("constraints")
+
+    return missing
+
+
+def _mentions_scope(text: str) -> bool:
+    keywords = (
+        "build",
+        "create",
+        "add",
+        "change",
+        "update",
+        "fix",
+        "feature",
+        "workflow",
+        "page",
+        "api",
+    )
+    return any(word in text for word in keywords)
+
+
+def _mentions_user(text: str) -> bool:
+    keywords = (
+        "user",
+        "customer",
+        "admin",
+        "team",
+        "founder",
+        "operator",
+        "developer",
+        "for me",
+        "for our",
+    )
+    return any(word in text for word in keywords)
+
+
+def _mentions_success(text: str) -> bool:
+    keywords = (
+        "so that",
+        "success",
+        "done when",
+        "should",
+        "must",
+        "able to",
+        "can ",
+        "outcome",
+    )
+    return any(word in text for word in keywords)
+
+
+def _mentions_constraints(text: str) -> bool:
+    keywords = (
+        "timeline",
+        "today",
+        "deadline",
+        "budget",
+        "minimal",
+        "mvp",
+        "no ",
+        "without",
+        "only",
+        "keep",
+    )
+    return any(word in text for word in keywords)
+
+
+def _next_clarifying_question(missing: list[str]) -> str:
+    if "scope" in missing:
+        return "What exact feature should I build first, and where should it appear?"
+    if "user" in missing:
+        return "Who is the primary user for this first version?"
+    if "success" in missing:
+        return "What does success look like for this first version in one sentence?"
+    if "constraints" in missing:
+        return "Any constraints I should respect, like timeline, scope, or tools?"
+    return "What should I clarify before I start?"

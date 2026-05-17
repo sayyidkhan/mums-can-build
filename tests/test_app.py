@@ -12,6 +12,20 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_connection_health_reports_core_services(monkeypatch) -> None:
+    client = TestClient(app)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    response = client.get("/health/connections")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["frontend"]["status"] == "ok"
+    assert payload["backend"]["status"] == "ok"
+    assert payload["openai"]["status"] == "down"
+    assert "codex" in payload
+
+
 def test_index_serves_voice_ui() -> None:
     client = TestClient(app)
 

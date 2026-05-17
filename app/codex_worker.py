@@ -3,12 +3,37 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Callable
 
 from app.events import event
 from app.schemas import CodexTask, EventType, SessionEvent
+
+
+async def check_codex_harness() -> dict[str, str]:
+    codex_path = shutil.which("codex")
+    if not codex_path:
+        return {"status": "down", "reason": "Codex CLI was not found on PATH."}
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            codex_path,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+    except TimeoutError:
+        return {"status": "degraded", "reason": "Codex CLI version check timed out."}
+    except OSError as exc:
+        return {"status": "down", "reason": f"Codex CLI failed to start: {exc.__class__.__name__}."}
+
+    output = (stdout or stderr).decode(errors="replace").strip()
+    if process.returncode == 0:
+        return {"status": "ok", "reason": output or "Codex CLI reachable."}
+    return {"status": "down", "reason": output or f"Codex CLI exited with {process.returncode}."}
 
 
 async def run_mock_codex(session_id: str, task: CodexTask) -> AsyncIterator[SessionEvent]:

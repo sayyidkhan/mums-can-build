@@ -8,18 +8,48 @@
   </head>
   <body>
     <main class="shell">
+      <aside class="health-strip" aria-label="Connection health">
+        <span class="health-pill checking" id="healthFe">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>FE</span>
+        </span>
+        <span class="health-pill checking" id="healthBe">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>BE</span>
+        </span>
+        <span class="health-pill checking" id="healthOpenai">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>OpenAI</span>
+        </span>
+        <span class="health-pill checking" id="healthWs">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>WS</span>
+        </span>
+        <span class="health-pill checking" id="healthCodex">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span>Codex</span>
+        </span>
+      </aside>
+
       <section class="voice-hero">
         <p class="brand">Mums Can Build</p>
         <div id="voiceOrb" class="voice-orb" aria-hidden="true">
+          <span class="orb-halo"></span>
+          <span class="orb-particles"></span>
           <span class="orb-core"></span>
+          <span class="orb-wave orb-wave-one"></span>
+          <span class="orb-wave orb-wave-two"></span>
           <span class="orb-shine"></span>
+          <span class="orb-spark"></span>
           <span class="orb-ring"></span>
         </div>
         <div class="call-state">
           <span class="signal" aria-hidden="true"></span>
           <span id="status">Idle</span>
         </div>
-        <p class="hint">Tap start and speak your request</p>
+        <p id="talkReadiness" class="talk-readiness" aria-live="polite">
+          Press Start call. Speak when you see "Listening now".
+        </p>
         <button id="startCall" class="call-button" type="button">
           <span class="mic-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" role="img">

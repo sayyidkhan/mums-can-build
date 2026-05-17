@@ -8,9 +8,9 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from app.codex_worker import run_mock_codex, run_real_codex
+from app.codex_worker import check_codex_harness, run_mock_codex, run_real_codex
 from app.events import event
-from app.realtime import RealtimeCallRequest, create_realtime_call
+from app.realtime import RealtimeCallRequest, check_openai_connection, create_realtime_call
 from app.schemas import EventType, SessionEvent, UserTranscriptMessage
 from app.sessions import SessionState, store
 from app.voice_pm import decide_next_step
@@ -30,6 +30,18 @@ async def index() -> str:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/connections")
+async def connection_health() -> dict[str, object]:
+    openai = await check_openai_connection()
+    codex = await check_codex_harness()
+    return {
+        "frontend": {"status": "ok", "reason": "Page assets loaded."},
+        "backend": {"status": "ok", "reason": "FastAPI is reachable."},
+        "openai": openai,
+        "codex": codex,
+    }
 
 
 @app.get("/sessions/{session_id}")
@@ -100,9 +112,36 @@ async def _handle_transcript(
             EventType.PM_THINKING,
             session.session_id,
             {"message": "Voice PM is checking the request."},
-            spoken="I am checking what you need.",
         ),
     )
+
+    # Gate delegation behind explicit user confirmation so voice turns can
+    # first refine requirements before Codex starts running.
+    if message.auto_start and session.current_task and _is_confirmation_turn(message.text):
+        if session.codex_running:
+            await _send(
+                websocket,
+                session,
+                event(
+                    EventType.SESSION_ERROR,
+                    session.session_id,
+                    {"error": "Codex is already running for this session."},
+                ),
+            )
+            return
+
+        await _send(
+            websocket,
+            session,
+            event(
+                EventType.PM_TASK_READY,
+                session.session_id,
+                {"task": session.current_task.model_dump()},
+                spoken="Confirmed. I am starting the build now.",
+            ),
+        )
+        await _run_worker(websocket, session, message, session.current_task)
+        return
 
     decision = decide_next_step(session.transcript_text)
     if decision.kind == "question":
@@ -140,7 +179,15 @@ async def _handle_transcript(
 
     if not message.auto_start:
         return
+    await _run_worker(websocket, session, message, decision.task)
 
+
+async def _run_worker(
+    websocket: WebSocket,
+    session: SessionState,
+    message: UserTranscriptMessage,
+    task,
+) -> None:
     if session.codex_running:
         await _send(
             websocket,
@@ -158,7 +205,7 @@ async def _handle_transcript(
         worker = _select_worker(
             message.worker,
             session.session_id,
-            decision.task,
+            task,
             message.workspace,
             session,
         )
@@ -166,6 +213,14 @@ async def _handle_transcript(
             await _send(websocket, session, worker_event)
     finally:
         session.codex_running = False
+
+
+def _is_confirmation_turn(text: str) -> bool:
+    normalized = text.lower().strip()
+    if not normalized:
+        return False
+    confirmations = ("confirm", "go ahead", "proceed", "start build", "ship it", "do it now", "delegate now")
+    return any(phrase in normalized for phrase in confirmations)
 
 
 def _select_worker(
