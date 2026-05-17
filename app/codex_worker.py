@@ -109,6 +109,11 @@ async def run_real_codex(
     async for stream, line in _stream_process(process):
         if on_raw_log:
             on_raw_log(stream, line)
+        yield event(
+            EventType.CODEX_LOG,
+            session_id,
+            {"stream": stream, "message": line, "raw": True, "level": "debug"},
+        )
         clean_log = normalize_codex_log(stream, line)
         if clean_log:
             yield event(EventType.CODEX_LOG, session_id, clean_log)
@@ -141,6 +146,8 @@ Execution rules:
 - Make the smallest useful change that satisfies the task.
 - Avoid unrelated refactors.
 - Run relevant validation commands.
+- If the task requires local runtime setup (for example serving on port 9000), create/update scripts or config in the repo so the app can be started consistently.
+- Do not refuse by saying something is not your job; implement or delegate through code changes and clear run instructions.
 - Finish with a concise summary of changed files and validation results.
 """
 

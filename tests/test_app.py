@@ -1,5 +1,9 @@
+import re
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+import app.main as main
 from app.main import app
 
 
@@ -80,3 +84,22 @@ def test_session_snapshot_includes_raw_log_count() -> None:
 
     assert response.status_code == 200
     assert "raw_codex_log_count" in response.json()
+
+
+def test_resolve_run_workspace_creates_timestamped_project_folder(tmp_path) -> None:
+    workspace = main._resolve_run_workspace("Build todo app for me", str(tmp_path))
+
+    assert workspace.exists()
+    assert workspace.is_dir()
+    assert workspace.parent == tmp_path
+    assert re.fullmatch(r"build-todo-app-for-me-\d{8}-\d{6}", workspace.name)
+
+
+def test_resolve_run_workspace_uses_default_workspace_root(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(main, "DEFAULT_WORKSPACE_ROOT", Path(tmp_path / "workspace-root"))
+
+    workspace = main._resolve_run_workspace("Prototype v1", None)
+
+    assert workspace.exists()
+    assert workspace.parent == tmp_path / "workspace-root"
+    assert workspace.name.startswith("prototype-v1-")

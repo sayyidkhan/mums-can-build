@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from pathlib import Path
+import re
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -19,6 +22,7 @@ load_dotenv()
 
 app = FastAPI(title="Mums Can Build", version="0.1.0")
 app.mount("/static", StaticFiles(directory="web"), name="static")
+DEFAULT_WORKSPACE_ROOT = Path("workspace")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -231,15 +235,58 @@ def _select_worker(
     session: SessionState,
 ) -> AsyncIterator[SessionEvent]:
     if worker == "real":
+        run_workspace = _resolve_run_workspace(task.title, workspace)
         return run_real_codex(
             session_id,
             task,
-            workspace,
+            str(run_workspace),
             on_raw_log=lambda stream, line: session.add_raw_codex_log(stream, line),
         )
     return run_mock_codex(session_id, task)
 
 
+def _resolve_run_workspace(task_title: str, requested_workspace: str | None) -> Path:
+    base = Path(requested_workspace).expanduser() if requested_workspace else DEFAULT_WORKSPACE_ROOT
+    base.mkdir(parents=True, exist_ok=True)
+
+    task_slug = _slugify(task_title) or "project"
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    run_dir = base / f"{task_slug}-{stamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:48]
+
+
 async def _send(websocket: WebSocket, session: SessionState, session_event: SessionEvent) -> None:
+    if session_event.type == EventType.CODEX_LOG and not session_event.spoken:
+        session_event.spoken = _spoken_update_for_codex_log(session_event.payload)
+    if session_event.type == EventType.SESSION_ERROR and not session_event.spoken:
+        error_text = str(session_event.payload.get("error", "")).strip()
+        if error_text:
+            session_event.spoken = f"I hit an issue: {error_text}"
+
     session.add_event(session_event)
     await websocket.send_json(session_event.model_dump(mode="json"))
+
+
+def _spoken_update_for_codex_log(payload: dict[str, object]) -> str | None:
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        return None
+
+    lowered = message.lower()
+    if "running validation command:" in lowered:
+        return "Running checks now."
+    if "command finished with exit code 0" in lowered:
+        return "Checks passed."
+    if "command finished with exit code" in lowered and "exit code 0" not in lowered:
+        return "A check failed. I will report details."
+    if lowered.startswith("edited ") or lowered.startswith("editing "):
+        return message
+    if "codex is inspecting the task" in lowered:
+        return "I am reviewing the codebase now."
+    return None

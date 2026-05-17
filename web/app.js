@@ -6,6 +6,8 @@ const talkReadiness = document.querySelector("#talkReadiness");
 const voiceOrb = document.querySelector("#voiceOrb");
 const transcriptLog = document.querySelector("#transcriptLog");
 const eventLog = document.querySelector("#eventLog");
+const eventsSummaryTab = document.querySelector("#eventsSummaryTab");
+const eventsRawTab = document.querySelector("#eventsRawTab");
 const remoteAudio = document.querySelector("#remoteAudio");
 const healthPills = {
   fe: document.querySelector("#healthFe"),
@@ -33,6 +35,11 @@ let bridgeSpeechCurrentLine = "";
 let bridgeSpeechTranscriptSeen = false;
 const assistantDraftByResponseId = new Map();
 let activeAssistantResponseId = null;
+const workerMode = "real";
+const workerWorkspace = null;
+const summaryEvents = [];
+const rawEvents = [];
+let selectedEventView = "summary";
 
 startButton.addEventListener("click", toggleCall);
 muteButton?.addEventListener("click", toggleMute);
@@ -45,6 +52,8 @@ window.addEventListener("offline", () => {
   setHealth("ws", "down", "Browser is offline.");
   setHealth("codex", "down", "Browser is offline.");
 });
+eventsSummaryTab?.addEventListener("click", () => setEventView("summary"));
+eventsRawTab?.addEventListener("click", () => setEventView("raw"));
 
 checkConnectionHealth();
 setInterval(checkConnectionHealth, 30000);
@@ -177,8 +186,7 @@ function connectHarness() {
   harnessSocket.addEventListener("message", (event) => {
     const payload = JSON.parse(event.data);
     setHealth("ws", "ok", "Harness WebSocket connected.");
-    const message = payload.payload?.message || payload.payload?.question || payload.type;
-    addEvent(payload.type, message);
+    addHarnessEvent(payload);
     if (payload.spoken && dataChannel?.readyState === "open") {
       enqueueBridgeSpeech(payload.spoken);
     }
@@ -200,7 +208,7 @@ function configureRealtimeSession() {
       session: {
         type: "realtime",
         instructions:
-          "You are the voice interface for Mums Can Build. Sound natural, warm, and concise. Use short spoken phrases with natural pacing. Do not explain logs, diffs, or implementation details. If a message starts with BRIDGE:, treat it as guidance from the app and respond conversationally with the same meaning in one short sentence.",
+          "You are the voice interface for Mums Can Build. Sound natural, warm, and concise. Use short spoken phrases with natural pacing. Do not explain logs, diffs, or implementation details. Never say a task is not your job. For build/dev-env requests (including starting ports like 9000), acknowledge and confirm you will delegate to the Codex builder. If a message starts with BRIDGE:, treat it as guidance from the app and respond conversationally with the same meaning in one short sentence.",
         output_modalities: ["audio"],
         audio: {
           input: {
@@ -307,8 +315,8 @@ function sendTranscriptToHarness(text) {
     JSON.stringify({
       type: "user.transcript",
       text,
-      worker: "mock",
-      workspace: null,
+      worker: workerMode,
+      workspace: workerWorkspace,
       auto_start: autoStart,
     }),
   );
@@ -347,7 +355,7 @@ function speakViaRealtime(text) {
       response: {
         modalities: ["audio"],
         instructions:
-          "Speak naturally in one concise sentence. Preserve intent, but do not read robotically or verbatim unless explicitly asked.",
+          "Speak naturally in one concise sentence. Preserve intent. If the user asks for infrastructure or run/setup actions, confirm delegation to the Codex builder and avoid refusal language.",
       },
     }),
   );
@@ -579,10 +587,46 @@ function clearAllDraftTranscripts() {
 }
 
 function addEvent(type, text) {
-  appendLine(eventLog, type, text);
+  summaryEvents.push({ label: type, text });
+  if (selectedEventView === "summary") {
+    appendLine(eventLog, type, text);
+  }
 }
 
-function appendLine(container, label, text) {
+function addRawEvent(stream, text) {
+  rawEvents.push({ label: stream, text });
+  if (selectedEventView === "raw") {
+    appendLine(eventLog, stream, text);
+  }
+}
+
+function addHarnessEvent(payload) {
+  const type = payload.type || "event";
+  const body = payload.payload || {};
+  const summaryMessage = body.message || body.question || type;
+  addEvent(type, summaryMessage);
+
+  if (type === "codex.log" && body.raw === true && body.message) {
+    addRawEvent(body.stream || "stdout", body.message);
+  }
+}
+
+function setEventView(view) {
+  selectedEventView = view;
+  eventsSummaryTab?.classList.toggle("active", view === "summary");
+  eventsRawTab?.classList.toggle("active", view === "raw");
+  renderEventLog();
+}
+
+function renderEventLog() {
+  eventLog.textContent = "";
+  const source = selectedEventView === "raw" ? rawEvents : summaryEvents;
+  for (const item of source) {
+    appendLine(eventLog, item.label, item.text, false);
+  }
+}
+
+function appendLine(container, label, text, autoScroll = true) {
   const line = document.createElement("div");
   line.className = "line";
   const meta = document.createElement("span");
@@ -590,7 +634,9 @@ function appendLine(container, label, text) {
   meta.textContent = label;
   line.append(meta, document.createTextNode(text));
   container.append(line);
-  container.scrollTop = container.scrollHeight;
+  if (autoScroll) {
+    container.scrollTop = container.scrollHeight;
+  }
 }
 
 function setStatus(text, live) {
