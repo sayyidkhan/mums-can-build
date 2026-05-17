@@ -2,195 +2,49 @@
 
 ## Core Vision
 
-A voice-first backend harness that:
+A lean voice-first backend harness that:
 - listens to users in real time
 - converts conversations into structured software tasks
 - coordinates Codex to build software
 - streams progress back to the user
 
-## POC scope (keep this minimal)
+The POC should prove one loop:
 
-For the first POC, treat the **voice agent as the project manager**: it clarifies intent, scopes work, and hands **structured tasks** to **Codex**—nothing else is in scope until that loop feels solid.
-
-- **Codex**: required integration (CLI or equivalent bridge from the harness).
-- **Database**: skip for POC (no SQLite/Postgres). Hold session/transcript/task state **in memory** in the backend process.
-- **Redis**: only add if you truly need a queue/pub-sub beyond an in-process queue; run **Redis locally** (Docker/`redis-server`), not a hosted DB.
-
----
-
-# Recommended Hackathon Stack
-
-## 1. Voice Layer
-
-### Realtime Voice
-- OpenAI Realtime API
-- WebSocket connection
-- Low-latency speech-to-speech interaction
-
-### Why
-This gives:
-- realtime conversations
-- interruption handling
-- streaming responses
-- natural “ChatGPT Voice”-like experience
-
----
-
-# 2. Backend Harness
-
-## Framework
-
-### Option A (Recommended)
-- FastAPI
-
-Why:
-- fast WebSocket support
-- async friendly
-- easy orchestration
-- great for AI backends
-
-### Option B
-- NestJS
-
-Use if:
-- you prefer TypeScript everywhere
-
----
-
-# 3. Agent Harness Layer
-
-POC framing: one primary agent—the **voice PM**—owns clarification and task shaping before Codex runs.
-
-## Recommended
-
-### Option A
-- Mastra
-
-Why:
-- lightweight
-- agent orchestration
-- workflow abstraction
-- hackathon friendly
-
-### Option B
-- LangGraph
-
-Why:
-- more advanced workflows
-- stateful agent graphs
-
-For hackathon:
-> Mastra is probably faster.
-
----
-
-# 4. Codex Execution Layer
-
-## Core
-- OpenAI Codex CLI
-
-Responsibilities:
-- inspect repo
-- edit files
-- run commands
-- generate code
-- validate builds
-
----
-
-# 5. Sandbox / Workspace
-
-## Recommended
-- git worktree
-- temporary isolated folders
-
-Example:
-
-```bash
-/workspaces/session-001
-/workspaces/session-002
+```text
+user talks
+→ voice PM clarifies intent
+→ structured task JSON
+→ Codex builds
+→ progress streams back
+→ user gives feedback
 ```
 
-Why:
-- isolated builds
-- safe iteration
-- easier cleanup
+## POC Scope
+
+Keep the first version deliberately small.
+
+In scope:
+- voice/session WebSocket
+- transcript and session state
+- voice PM task shaping
+- mock Codex worker for harness testing
+- real Codex CLI worker via subprocess
+- progress streaming
+
+Out of scope:
+- database
+- auth
+- multi-tenancy
+- dashboard
+- hosted queues
+- agent frameworks
+- production deployment complexity
+
+Redis is allowed only if in-memory state becomes painful or you need simple local pub/sub between processes.
 
 ---
 
-# 6. Real-Time Event Streaming
-
-## Recommended
-- WebSockets
-
-Used for:
-- live logs
-- transcript streaming
-- Codex progress
-- task updates
-
----
-
-# 7. Database
-
-POC default: **none**. Persist nothing beyond what git already captures once Codex edits the repo.
-
-When you outgrow POC:
-
-## Simple Option
-- SQLite
-
-## Scalable Option
-- PostgreSQL
-
-Store (later): sessions, transcripts, tasks, diffs, previews.
-
----
-
-# 8. Queue System
-
-POC default: **in-memory async queue** inside the backend (good enough for one Codex job at a time).
-
-If you need durability or worker separation:
-
-### Optional (local only)
-- Redis (local)
-- BullMQ (if you adopt Redis)
-
-Used for:
-- Codex jobs
-- background execution
-- retries
-
----
-
-# 9. Frontend (Optional for POC)
-
-## Recommended
-- Next.js
-
-Only needed for:
-- transcript UI
-- preview iframe
-- logs panel
-
-But honestly:
-> backend-only POC is enough initially.
-
----
-
-# 10. Deployment
-
-## Fastest
-- Railway
-- Render
-
-## Frontend
-- Vercel
-
----
-
-# Final Recommended Stack
+# Final POC Stack
 
 ```text
 Voice:
@@ -199,30 +53,259 @@ Voice:
 Backend Harness:
 - FastAPI
 
-Agent Orchestration:
-- Mastra
-
-Voice agent role (POC):
-- Project manager → structured tasks → Codex
-
-Execution:
-- Codex CLI
+Runtime:
+- Python asyncio
 
 Realtime:
 - WebSockets
 
-Queue (POC):
-- in-process (optional: local Redis + BullMQ)
+State:
+- in-memory first
+- optional local Redis if needed
 
-Database (POC):
+Codex Bridge:
+- mock Codex worker first
+- real Codex CLI subprocess second
+
+Workspace:
+- local repo for earliest testing
+- git worktree per session when isolation is needed
+
+Database:
 - none
 
 Frontend:
-- Next.js (optional)
-
-Deployment:
-- Railway + Vercel
+- none for first POC
+- optional minimal UI later
 ```
+
+---
+
+# 1. Voice Layer
+
+## Recommended
+
+- OpenAI Realtime API
+- WebSocket connection
+- low-latency speech-to-speech interaction
+
+Why:
+- realtime conversations
+- interruption handling
+- streaming responses
+- natural voice-first experience
+
+---
+
+# 2. Backend Harness
+
+## Recommended
+
+- FastAPI
+
+Use FastAPI as a thin transport and orchestration layer.
+
+It should handle:
+- WebSocket connections
+- receiving audio, transcript, and session events
+- keeping session state
+- calling the voice PM logic
+- starting Codex workers
+- streaming logs and task status back to the user
+
+It should not become a large backend platform.
+
+Avoid for POC:
+- ORM
+- database models
+- complex routers
+- dependency injection layers
+- background job framework
+- separate services
+
+Minimal structure:
+
+```text
+app/
+  main.py
+  sessions.py
+  voice_pm.py
+  codex_worker.py
+```
+
+---
+
+# 3. State
+
+## Default
+
+- in-memory Python objects
+
+Use this first for:
+- active sessions
+- transcript buffer
+- current requirements
+- current task state
+- current Codex run status
+
+## Optional
+
+- local Redis
+
+Use Redis only if you need:
+- state shared across multiple backend processes
+- simple pub/sub for streaming events
+- resumable-ish session state during local development
+- a small queue for Codex jobs
+
+Do not use Redis as a reason to add BullMQ, Celery, or a larger worker system in the POC.
+
+---
+
+# 4. Voice PM Layer
+
+The voice PM is not an extra framework at first.
+
+It is plain application logic that:
+- reads transcript/session context
+- asks clarifying questions
+- extracts requirements
+- creates a structured Codex task
+- decides when the task is ready to run
+
+Every Codex task should use this shape:
+
+```json
+{
+  "title": "Short task title",
+  "user_goal": "What the user wants in plain English",
+  "requirements": [
+    "Requirement 1",
+    "Requirement 2"
+  ],
+  "acceptance_criteria": [
+    "Criteria 1",
+    "Criteria 2"
+  ],
+  "constraints": [
+    "Do not change unrelated files",
+    "Keep implementation simple for demo"
+  ]
+}
+```
+
+Do not add Mastra or LangGraph until plain code becomes the bottleneck.
+
+---
+
+# 5. Codex Execution Layer
+
+## Recommended Development Order
+
+### 1. Mock Codex Worker
+
+Use this first to test the harness loop without invoking real Codex.
+
+It should emit fake progress events:
+
+```text
+codex_started
+codex_log
+codex_done
+```
+
+This validates:
+- WebSocket event flow
+- session state
+- task creation
+- progress streaming
+- user feedback loop
+
+### 2. Real Codex CLI Worker
+
+Once the harness works, run Codex through a subprocess:
+
+```text
+FastAPI
+→ asyncio subprocess
+→ codex exec
+→ streamed stdout/stderr
+→ git diff/result summary
+```
+
+Responsibilities:
+- receive structured task JSON
+- generate a Codex prompt
+- run Codex in the selected workspace
+- stream logs back to the user
+- capture completion status
+- capture changed files or git diff
+
+---
+
+# 6. Workspace
+
+## Earliest POC
+
+Run Codex in one local test repo.
+
+This is fastest for proving the loop.
+
+## Better POC
+
+Use one git worktree per session:
+
+```bash
+git worktree add /tmp/mcb-session-001 main
+```
+
+Why:
+- isolates Codex runs
+- makes diffs easier to inspect
+- allows cleanup after each session
+- reduces accidental damage to the main repo
+
+---
+
+# 7. Real-Time Event Streaming
+
+Use WebSockets for all live events:
+- transcript updates
+- voice PM status
+- clarifying questions
+- task JSON preview
+- Codex logs
+- completion status
+- preview URL later
+
+Keep event payloads simple JSON.
+
+---
+
+# 8. Frontend
+
+No frontend is required for the first POC.
+
+Start with:
+- WebSocket client script
+- terminal logs
+- voice/transcript test input
+
+Add a minimal UI later only if needed for demo clarity.
+
+---
+
+# 9. Deployment
+
+Do not optimize deployment yet.
+
+For the first version:
+- run locally
+- use local environment variables
+- use local Redis only if needed
+- run Codex on the same machine
+
+Deployment comes after the local voice-to-Codex loop works.
 
 ---
 
@@ -237,13 +320,8 @@ streaming-first
 demo-first
 ```
 
-Do NOT overbuild:
-- auth
-- multi-tenancy
-- Kubernetes
-- scalable infra
-- production security
-
 The magic is:
 
-> user talks → PM agent scopes → Codex builds live.
+```text
+user talks → PM scopes → Codex builds live
+```
