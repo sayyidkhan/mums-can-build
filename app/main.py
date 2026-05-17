@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 import re
+import subprocess
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -23,6 +24,47 @@ load_dotenv()
 app = FastAPI(title="Mums Can Build", version="0.1.0")
 app.mount("/static", StaticFiles(directory="web"), name="static")
 DEFAULT_WORKSPACE_ROOT = Path("workspace")
+RUNTIME_PID_FILE = Path("/tmp/mcb-runtime-9000.pid")
+
+
+def _start_workspace_app(workspace: Path, port: int = 9000) -> dict[str, object]:
+    _stop_port_process(port)
+    process = subprocess.Popen(
+        ["npm", "start"],
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env={**dict(**__import__("os").environ), "PORT": str(port)},
+        start_new_session=True,
+    )
+    RUNTIME_PID_FILE.write_text(str(process.pid), encoding="utf-8")
+    return {"started": True, "pid": process.pid, "url": f"http://127.0.0.1:{port}"}
+
+
+def _stop_port_process(port: int = 9000) -> None:
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return
+    pids = [item.strip() for item in result.stdout.splitlines() if item.strip()]
+    for pid in pids:
+        subprocess.run(["kill", "-9", pid], check=False)
+
+
+@app.post("/runtime/start-latest")
+async def runtime_start_latest() -> dict[str, object]:
+    candidates = sorted(DEFAULT_WORKSPACE_ROOT.glob("e2e-*/*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No generated workspace found.")
+    latest = candidates[0]
+    if not (latest / "package.json").exists():
+        raise HTTPException(status_code=400, detail="Latest workspace does not contain package.json.")
+    return {"workspace": str(latest), **_start_workspace_app(latest, 9000)}
 
 
 @app.get("/", response_class=HTMLResponse)

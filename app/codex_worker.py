@@ -121,6 +121,23 @@ async def run_real_codex(
     return_code = await process.wait()
     diff_summary = await _git_changed_files(workspace_path)
     status = "completed" if return_code == 0 else "failed"
+    runtime = None
+    if return_code == 0:
+        runtime = await _auto_start_workspace_app(workspace_path, port=9000)
+        if runtime["started"]:
+            yield event(
+                EventType.CODEX_LOG,
+                session_id,
+                {"stream": "runtime", "message": f"App started on http://127.0.0.1:9000 ({runtime['details']})"},
+                spoken="Your app is now running on localhost 9000.",
+            )
+        elif runtime["attempted"]:
+            yield event(
+                EventType.CODEX_LOG,
+                session_id,
+                {"stream": "runtime", "message": f"Auto-start on port 9000 failed: {runtime['details']}", "level": "error"},
+                spoken="Build is done, but I could not keep localhost 9000 up automatically.",
+            )
     spoken = "The first version is ready." if return_code == 0 else "The builder hit an error."
     yield event(
         EventType.CODEX_DONE,
@@ -130,6 +147,7 @@ async def run_real_codex(
             "status": status,
             "return_code": return_code,
             "changed_files": diff_summary,
+            "runtime": runtime,
         },
         spoken=spoken,
     )
@@ -286,3 +304,45 @@ async def _git_changed_files(workspace: Path) -> list[str]:
     if process.returncode != 0:
         return []
     return [line.strip() for line in stdout.decode().splitlines() if line.strip()]
+
+
+async def _auto_start_workspace_app(workspace: Path, port: int = 9000) -> dict[str, object]:
+    package_json = workspace / "package.json"
+    if not package_json.exists():
+        return {"attempted": False, "started": False, "details": "No package.json found."}
+
+    start_script = Path(__file__).resolve().parent.parent / "scripts" / "start-on-9000.sh"
+    if not start_script.exists():
+        return {"attempted": False, "started": False, "details": "start-on-9000.sh not found."}
+
+    env = os.environ.copy()
+    env["APP_DIR"] = str(workspace)
+    env["START_CMD"] = "npm start"
+    env["PORT"] = str(port)
+    process = await asyncio.create_subprocess_exec(
+        "bash",
+        str(start_script),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    stdout, stderr = await process.communicate()
+    output = (stdout or b"").decode(errors="replace") + (stderr or b"").decode(errors="replace")
+    if process.returncode != 0:
+        return {"attempted": True, "started": False, "details": output.strip() or "launcher failed"}
+
+    probe = await asyncio.create_subprocess_exec(
+        "curl",
+        "-sS",
+        f"http://127.0.0.1:{port}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    curl_out, curl_err = await probe.communicate()
+    if probe.returncode == 0:
+        return {"attempted": True, "started": True, "details": "HTTP probe passed."}
+    return {
+        "attempted": True,
+        "started": False,
+        "details": ((curl_err or b"").decode(errors="replace") or (curl_out or b"").decode(errors="replace")).strip(),
+    }
