@@ -1,0 +1,23 @@
+[project]
+name = "mums-can-build"
+version = "0.1.0"
+description = "Voice-first harness that turns spoken software ideas into scoped Codex build tasks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.124.0",
+  "httpx>=0.28.0",
+  "pydantic>=2.12.0",
+  "python-dotenv>=1.2.0",
+  "uvicorn[standard]>=0.38.0",
+  "websockets>=15.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

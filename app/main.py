@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
+
+from app.codex_worker import run_mock_codex, run_real_codex
+from app.events import event
+from app.realtime import RealtimeCallRequest, create_realtime_call
+from app.schemas import EventType, SessionEvent, UserTranscriptMessage
+from app.sessions import SessionState, store
+from app.voice_pm import decide_next_step
+
+load_dotenv()
+
+app = FastAPI(title="Mums Can Build", version="0.1.0")
+app.mount("/static", StaticFiles(directory="web"), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> str:
+    with open("web/index.html", encoding="utf-8") as file:
+        return file.read()
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/sessions/{session_id}")
+async def get_session(session_id: str) -> dict[str, object]:
+    return store.snapshot(session_id)
+
+
+@app.post("/realtime/call", response_class=PlainTextResponse)
+async def realtime_call(request: RealtimeCallRequest) -> str:
+    try:
+        return await create_realtime_call(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_session(websocket: WebSocket, session_id: str) -> None:
+    await websocket.accept()
+    session = store.get(session_id)
+    await _send(
+        websocket,
+        session,
+        event(
+            EventType.SESSION_STARTED,
+            session_id,
+            {"message": "Session started."},
+            spoken="I am ready.",
+        ),
+    )
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            try:
+                message = UserTranscriptMessage.model_validate(data)
+            except ValidationError as exc:
+                await _send(
+                    websocket,
+                    session,
+                    event(
+                        EventType.SESSION_ERROR,
+                        session_id,
+                        {"error": "Invalid message.", "details": exc.errors()},
+                    ),
+                )
+                continue
+
+            await _handle_transcript(websocket, session, message)
+    except WebSocketDisconnect:
+        return
+
+
+async def _handle_transcript(
+    websocket: WebSocket,
+    session: SessionState,
+    message: UserTranscriptMessage,
+) -> None:
+    session.add_transcript(message.text)
+    await _send(
+        websocket,
+        session,
+        event(EventType.USER_TRANSCRIPT, session.session_id, {"text": message.text}),
+    )
+    await _send(
+        websocket,
+        session,
+        event(
+            EventType.PM_THINKING,
+            session.session_id,
+            {"message": "Voice PM is checking the request."},
+            spoken="I am checking what you need.",
+        ),
+    )
+
+    decision = decide_next_step(session.transcript_text)
+    if decision.kind == "question":
+        await _send(
+            websocket,
+            session,
+            event(
+                EventType.PM_QUESTION,
+                session.session_id,
+                {"question": decision.question},
+                spoken=decision.question,
+            ),
+        )
+        return
+
+    if decision.task is None:
+        await _send(
+            websocket,
+            session,
+            event(EventType.SESSION_ERROR, session.session_id, {"error": "No task was created."}),
+        )
+        return
+
+    session.current_task = decision.task
+    await _send(
+        websocket,
+        session,
+        event(
+            EventType.PM_TASK_READY,
+            session.session_id,
+            {"task": decision.task.model_dump()},
+            spoken="I have enough. I am preparing the build task.",
+        ),
+    )
+
+    if not message.auto_start:
+        return
+
+    if session.codex_running:
+        await _send(
+            websocket,
+            session,
+            event(
+                EventType.SESSION_ERROR,
+                session.session_id,
+                {"error": "Codex is already running for this session."},
+            ),
+        )
+        return
+
+    session.codex_running = True
+    try:
+        worker = _select_worker(
+            message.worker,
+            session.session_id,
+            decision.task,
+            message.workspace,
+            session,
+        )
+        async for worker_event in worker:
+            await _send(websocket, session, worker_event)
+    finally:
+        session.codex_running = False
+
+
+def _select_worker(
+    worker: str,
+    session_id: str,
+    task,
+    workspace: str | None,
+    session: SessionState,
+) -> AsyncIterator[SessionEvent]:
+    if worker == "real":
+        return run_real_codex(
+            session_id,
+            task,
+            workspace,
+            on_raw_log=lambda stream, line: session.add_raw_codex_log(stream, line),
+        )
+    return run_mock_codex(session_id, task)
+
+
+async def _send(websocket: WebSocket, session: SessionState, session_event: SessionEvent) -> None:
+    session.add_event(session_event)
+    await websocket.send_json(session_event.model_dump(mode="json"))
