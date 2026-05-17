@@ -235,7 +235,7 @@ def _select_worker(
     session: SessionState,
 ) -> AsyncIterator[SessionEvent]:
     if worker == "real":
-        run_workspace = _resolve_run_workspace(task.title, workspace)
+        run_workspace = _resolve_run_workspace(task.title, session_id, workspace)
         return run_real_codex(
             session_id,
             task,
@@ -245,13 +245,17 @@ def _select_worker(
     return run_mock_codex(session_id, task)
 
 
-def _resolve_run_workspace(task_title: str, requested_workspace: str | None) -> Path:
+def _resolve_run_workspace(task_title: str, session_id: str, requested_workspace: str | None) -> Path:
     base = Path(requested_workspace).expanduser() if requested_workspace else DEFAULT_WORKSPACE_ROOT
     base.mkdir(parents=True, exist_ok=True)
 
+    session_slug = _slugify(session_id) or "session"
+    session_root = base / session_slug
+    session_root.mkdir(parents=True, exist_ok=True)
+
     task_slug = _slugify(task_title) or "project"
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    run_dir = base / f"{task_slug}-{stamp}"
+    run_dir = session_root / f"{task_slug}-{stamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 

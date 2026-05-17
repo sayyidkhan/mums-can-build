@@ -147,6 +147,8 @@ Execution rules:
 - Avoid unrelated refactors.
 - Run relevant validation commands.
 - If the task requires local runtime setup (for example serving on port 9000), create/update scripts or config in the repo so the app can be started consistently.
+- If the requested port (especially 9000) is already in use, stop the existing process on that port and then start the new app on the requested port.
+- Prefer deterministic commands in scripts (for example using lsof/fuser-based pre-stop) so reruns succeed without manual cleanup.
 - Do not refuse by saying something is not your job; implement or delegate through code changes and clear run instructions.
 - Finish with a concise summary of changed files and validation results.
 """
