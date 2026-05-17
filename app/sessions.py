@@ -41,6 +41,7 @@ class SessionState:
 class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
+        self._runtime_memory: dict[str, Any] = {}
 
     def get(self, session_id: str) -> SessionState:
         if session_id not in self._sessions:
@@ -56,8 +57,17 @@ class SessionStore:
             "codex_running": session.codex_running,
             "event_count": len(session.events),
             "raw_codex_log_count": len(session.metadata.get("raw_codex_logs", [])),
+            "active_workspace": session.metadata.get("active_workspace"),
+            "codex_session_id": session.metadata.get("codex_session_id"),
+            "runtime_memory": self._runtime_memory,
             "created_at": session.created_at.isoformat(),
         }
+
+    def set_runtime_memory(self, key: str, value: Any) -> None:
+        self._runtime_memory[key] = value
+
+    def get_runtime_memory(self, key: str) -> Any:
+        return self._runtime_memory.get(key)
 
 
 store = SessionStore()

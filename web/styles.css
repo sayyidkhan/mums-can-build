@@ -365,6 +365,42 @@ body {
   font-weight: 600;
 }
 
+.workspace-status {
+  margin: 6px 0 0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.runtime-status-row {
+  margin-top: 6px;
+  width: min(980px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.runtime-status-row .workspace-status {
+  min-width: 0;
+  width: 100%;
+  display: block;
+  margin: 0;
+  text-align: left;
+}
+
+#workspaceStatus {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#codexSessionStatus {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .talk-readiness.ready {
   border-color: rgba(22, 163, 74, 0.34);
   background: rgba(220, 252, 231, 0.8);

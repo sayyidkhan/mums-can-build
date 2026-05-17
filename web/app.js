@@ -8,6 +8,8 @@ const transcriptLog = document.querySelector("#transcriptLog");
 const eventLog = document.querySelector("#eventLog");
 const eventsSummaryTab = document.querySelector("#eventsSummaryTab");
 const eventsRawTab = document.querySelector("#eventsRawTab");
+const workspaceStatus = document.querySelector("#workspaceStatus");
+const codexSessionStatus = document.querySelector("#codexSessionStatus");
 const remoteAudio = document.querySelector("#remoteAudio");
 const healthPills = {
   fe: document.querySelector("#healthFe"),
@@ -40,6 +42,8 @@ const workerWorkspace = null;
 const summaryEvents = [];
 const rawEvents = [];
 let selectedEventView = "summary";
+let activeWorkspace = "";
+let activeCodexSessionId = "";
 
 startButton.addEventListener("click", toggleCall);
 muteButton?.addEventListener("click", toggleMute);
@@ -331,7 +335,7 @@ function hasStartConfirmation(text) {
   if (!normalized) {
     return false;
   }
-  return /(confirm|go ahead|proceed|start build|ship it|do it now|delegate now)/.test(normalized);
+  return /\b(confirm|go ahead|proceed|start build(?:ing)?|start the build|build now|ship it|do it now|delegate now|go build|launch|build)\b/.test(normalized);
 }
 
 function speakViaRealtime(text) {
@@ -604,11 +608,46 @@ function addHarnessEvent(payload) {
   const type = payload.type || "event";
   const body = payload.payload || {};
   const summaryMessage = body.message || body.question || type;
+  if (type === "codex.started") {
+    const workspace = String(body.workspace || "").trim();
+    if (workspace) {
+      activeWorkspace = workspace;
+      if (workspaceStatus) {
+        workspaceStatus.textContent = `Codex workspace: ${workspace}`;
+      }
+      addEvent("codex", `Spawned and running in ${workspace}`);
+    } else {
+      addEvent("codex", "Spawned.");
+    }
+  }
   addEvent(type, summaryMessage);
+
+  if (type === "codex.log" && body.raw === true && body.message) {
+    const codexThreadId = extractCodexThreadId(String(body.message));
+    if (codexThreadId && codexThreadId !== activeCodexSessionId) {
+      activeCodexSessionId = codexThreadId;
+      if (codexSessionStatus) {
+        codexSessionStatus.textContent = `Codex session: ${codexThreadId}`;
+      }
+      addEvent("codex", `Session connected: ${codexThreadId}`);
+    }
+  }
 
   if (type === "codex.log" && body.raw === true && body.message) {
     addRawEvent(body.stream || "stdout", body.message);
   }
+}
+
+function extractCodexThreadId(rawMessage) {
+  try {
+    const parsed = JSON.parse(rawMessage);
+    if (parsed && parsed.type === "thread.started" && parsed.thread_id) {
+      return String(parsed.thread_id);
+    }
+  } catch {
+    return "";
+  }
+  return "";
 }
 
 function setEventView(view) {
